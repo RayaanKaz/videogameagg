@@ -3,27 +3,20 @@ import requests
 import json
 import sqlite3
 import google.generativeai as genai
-import os
-from dotenv import load_dotenv
 import hashlib
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-load_dotenv()
-
 # Steam API Key
-STEAM_API_KEY = os.getenv("STEAM_API_KEY")
+STEAM_API_KEY = "7652E181BA9B2EE6887F33D8C937AE4C"
 
-# Configure Google Generative AI
-GENAI_API_KEY = os.getenv("GENAI_API_KEY")
-import google.generativeai as genai
-genai.configure(api_key=GENAI_API_KEY)
+genai.configure(api_key="AIzaSyB7_ZvRT_19LQn5K8QMjSW6w3jsPDG90AM")
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # IGDB API Credentials
-CLIENT_ID = os.getenv("IGDB_CLIENT_ID")
-ACCESS_TOKEN = os.getenv("IGDB_ACCESS_TOKEN")
+CLIENT_ID = "76ewtd7xb9gau6hfuwgjkhbb5hwgl1"
+ACCESS_TOKEN = "n6uu577lr16hq9cspy7dhyy8m8idkn"
 BASE_URL = "https://api.igdb.com/v4"
 
 # Database setup
@@ -70,13 +63,9 @@ def init_db():
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            steam_user_id TEXT,
-            user_id INTEGER,
-            label TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(user_id),
-            UNIQUE(steam_user_id, user_id)
-        );
+            steam_user_id TEXT PRIMARY KEY,
+            label TEXT
+        )
     """)
 
     # Create wishlist table
@@ -120,7 +109,7 @@ def register_user(username, password):
     hashed_password = hash_password(password)
     try:
         cursor.execute("""
-            INSERT INTO users (username, password) VALUES (?,?)
+            INSERT INTO users (username, password) VALUES (?, ?)
         """, (username, hashed_password))
         conn.commit()
         st.success("Registration successful! You can now log in.")
@@ -611,8 +600,6 @@ def get_user_reviews_for_ai(user_id):
     finally:
         conn.close()
 
-
-
 def add_to_wishlist(user_id, steam_game_id, game_name, cover_url, store_url):
     """Add a game to the user's wishlist if it is not already present."""
     conn = sqlite3.connect(DB_FILE)
@@ -783,16 +770,16 @@ else:
             # If the wishlist is empty
             st.write("Your wishlist is empty.")
 
-    # "Your Games" Section with Steam Account Labeling Feature
+    # Full updated "Your Games" section
     elif page == "Your Games":
         st.header("Your Steam Games")
-
+    
         # Fetch Steam accounts linked to the user
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("""
             SELECT DISTINCT steam_user_id, 
-                            (SELECT label FROM accounts WHERE steam_user_id = g.steam_user_id AND label IS NOT NULL LIMIT 1) AS label
+                            (SELECT label FROM accounts WHERE steam_user_id = g.steam_user_id LIMIT 1) AS label
             FROM games g WHERE user_id = ?
         """, (user_id,))
         steam_accounts = cursor.fetchall()
@@ -801,33 +788,12 @@ else:
         if not steam_accounts:
             st.write("No Steam accounts linked. Please add your Steam account first.")
         else:
-            # Display Steam accounts in a dropdown with an option to label accounts
+            # Display Steam accounts in a dropdown
             options = [f"{account[1] or 'No Label'} ({account[0]})" for account in steam_accounts]
             selected_account = st.selectbox("Select Steam Account:", options)
 
             if selected_account and "None" not in selected_account:
                 steam_user_id = steam_accounts[options.index(selected_account)][0]
-
-                # Labeling Feature
-                st.subheader("Label Your Steam Account")
-                existing_label = steam_accounts[options.index(selected_account)][1] or ""
-                new_label = st.text_input("Set a label for this account:", value=existing_label)
-
-                if st.button("Save Label"):
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute("""
-                            INSERT INTO accounts (steam_user_id, label) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(steam_user_id) DO UPDATE SET label = ?
-                        """, (steam_user_id, new_label, new_label))
-                        conn.commit()
-                        st.success("Label saved successfully!")
-                    except Exception as e:
-                        st.error(f"Error saving label: {e}")
-                    finally:
-                        conn.close()
 
                 # Enable Refresh Library button only if a valid account is selected
                 if st.button("Refresh Library"):
@@ -848,10 +814,10 @@ else:
                     for game in games:
                         if filter_genre.lower() in game[4].lower():
                             col1, col2 = st.columns([1, 2])
-
+                        
                             with col1:
                                 st.image(game[5], width=150)
-
+                        
                             with col2:
                                 st.write(f"**[{game[2]}]({game[6]})**")
                                 st.write(f"**Playtime:** {game[3]} minutes")
@@ -875,7 +841,7 @@ else:
                                     if st.button(f"Submit Review for {game[2]}", key=f"submit_{game[0]}"):
                                         add_or_update_review(user_id, game[1], game[2], review, rating)
                                         st.success("Review submitted successfully.")
-
+                        
                             st.divider()
                 else:
                     st.write("You don't own any games on this account.")
