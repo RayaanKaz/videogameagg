@@ -3,20 +3,27 @@ import requests
 import json
 import sqlite3
 import google.generativeai as genai
+import os
+from dotenv import load_dotenv
 import hashlib
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-# Steam API Key
-STEAM_API_KEY = "7652E181BA9B2EE6887F33D8C937AE4C"
+load_dotenv()
 
-genai.configure(api_key="AIzaSyB7_ZvRT_19LQn5K8QMjSW6w3jsPDG90AM")
+# Steam API Key
+STEAM_API_KEY = os.getenv("STEAM_API_KEY")
+
+# Configure Google Generative AI
+GENAI_API_KEY = os.getenv("GENAI_API_KEY")
+import google.generativeai as genai
+genai.configure(api_key=GENAI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # IGDB API Credentials
-CLIENT_ID = "76ewtd7xb9gau6hfuwgjkhbb5hwgl1"
-ACCESS_TOKEN = "n6uu577lr16hq9cspy7dhyy8m8idkn"
+CLIENT_ID = os.getenv("IGDB_CLIENT_ID")
+ACCESS_TOKEN = os.getenv("IGDB_ACCESS_TOKEN")
 BASE_URL = "https://api.igdb.com/v4"
 
 # Database setup
@@ -69,7 +76,7 @@ def init_db():
             label TEXT,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
             UNIQUE(steam_user_id, user_id)
-        )
+        );
     """)
 
     # Create wishlist table
@@ -113,7 +120,7 @@ def register_user(username, password):
     hashed_password = hash_password(password)
     try:
         cursor.execute("""
-            INSERT INTO users (username, password) VALUES (?, ?, ?)
+            INSERT INTO users (username, password) VALUES (?,?)
         """, (username, hashed_password))
         conn.commit()
         st.success("Registration successful! You can now log in.")
@@ -603,6 +610,8 @@ def get_user_reviews_for_ai(user_id):
         return []
     finally:
         conn.close()
+
+
 
 def add_to_wishlist(user_id, steam_game_id, game_name, cover_url, store_url):
     """Add a game to the user's wishlist if it is not already present."""
