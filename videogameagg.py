@@ -3,20 +3,27 @@ import requests
 import json
 import sqlite3
 import google.generativeai as genai
+import os
+from dotenv import load_dotenv
 import hashlib
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-# Steam API Key
-STEAM_API_KEY = "7652E181BA9B2EE6887F33D8C937AE4C"
+load_dotenv()
 
-genai.configure(api_key="AIzaSyB7_ZvRT_19LQn5K8QMjSW6w3jsPDG90AM")
+# Steam API Key
+STEAM_API_KEY = os.getenv("STEAM_API_KEY")
+
+# Configure Google Generative AI
+GENAI_API_KEY = os.getenv("GENAI_API_KEY")
+import google.generativeai as genai
+genai.configure(api_key=GENAI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # IGDB API Credentials
-CLIENT_ID = "76ewtd7xb9gau6hfuwgjkhbb5hwgl1"
-ACCESS_TOKEN = "n6uu577lr16hq9cspy7dhyy8m8idkn"
+CLIENT_ID = os.getenv("IGDB_CLIENT_ID")
+ACCESS_TOKEN = os.getenv("IGDB_ACCESS_TOKEN")
 BASE_URL = "https://api.igdb.com/v4"
 
 # Database setup
@@ -63,9 +70,12 @@ def init_db():
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
-            steam_user_id TEXT PRIMARY KEY,
-            label TEXT
-        )
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            steam_user_id TEXT,
+            user_id INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(user_id),
+            UNIQUE(steam_user_id, user_id)
+        );
     """)
 
     # Create wishlist table
@@ -109,7 +119,7 @@ def register_user(username, password):
     hashed_password = hash_password(password)
     try:
         cursor.execute("""
-            INSERT INTO users (username, password) VALUES (?, ?)
+            INSERT INTO users (username, password) VALUES (?,?)
         """, (username, hashed_password))
         conn.commit()
         st.success("Registration successful! You can now log in.")
@@ -146,6 +156,25 @@ def extract_user_id(steam_url):
     except Exception as e:
         st.error(f"Error parsing URL: {e}")
         return None
+
+def get_steam_username(steam_id):
+    """Fetch Steam username from Steam ID."""
+    url = f"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
+    params = {
+        "key": STEAM_API_KEY,
+        "steamids": steam_id
+    }
+    try:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            players = data.get("response", {}).get("players", [])
+            if players:
+                return players[0].get("personaname", steam_id)
+        return steam_id  # Return the ID if username can't be fetched
+    except Exception as e:
+        st.error(f"Error fetching Steam username: {e}")
+        return steam_id
 
 def resolve_vanity_url(vanity_url):
     url = f"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key={STEAM_API_KEY}&vanityurl={vanity_url}"
@@ -600,6 +629,8 @@ def get_user_reviews_for_ai(user_id):
     finally:
         conn.close()
 
+
+
 def add_to_wishlist(user_id, steam_game_id, game_name, cover_url, store_url):
     """Add a game to the user's wishlist if it is not already present."""
     conn = sqlite3.connect(DB_FILE)
@@ -770,16 +801,15 @@ else:
             # If the wishlist is empty
             st.write("Your wishlist is empty.")
 
-    # Full updated "Your Games" section
+    # "Your Games" Section with Steam Account Labeling Feature
     elif page == "Your Games":
         st.header("Your Steam Games")
-    
+
         # Fetch Steam accounts linked to the user
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT DISTINCT steam_user_id, 
-                            (SELECT label FROM accounts WHERE steam_user_id = g.steam_user_id LIMIT 1) AS label
+            SELECT DISTINCT steam_user_id
             FROM games g WHERE user_id = ?
         """, (user_id,))
         steam_accounts = cursor.fetchall()
@@ -788,9 +818,14 @@ else:
         if not steam_accounts:
             st.write("No Steam accounts linked. Please add your Steam account first.")
         else:
-            # Display Steam accounts in a dropdown
-            options = [f"{account[1] or 'No Label'} ({account[0]})" for account in steam_accounts]
+            # Convert Steam IDs to usernames
+            steam_accounts_with_names = [(account[0], get_steam_username(account[0])) for account in steam_accounts]
+            options = [f"{account[1]} ({account[0]})" for account in steam_accounts_with_names]
             selected_account = st.selectbox("Select Steam Account:", options)
+
+            if selected_account:
+                # Extract Steam ID from the selected option
+                steam_user_id = selected_account.split('(')[-1].strip(')')
 
             if selected_account and "None" not in selected_account:
                 steam_user_id = steam_accounts[options.index(selected_account)][0]
@@ -814,13 +849,14 @@ else:
                     for game in games:
                         if filter_genre.lower() in game[4].lower():
                             col1, col2 = st.columns([1, 2])
-                        
+
                             with col1:
                                 st.image(game[5], width=150)
-                        
+
                             with col2:
                                 st.write(f"**[{game[2]}]({game[6]})**")
-                                st.write(f"**Playtime:** {game[3]} minutes")
+                                hours = round(game[3] / 60, 1)
+                                st.write(f"**Playtime:** {game[3]} minutes ({hours} hours)")
                                 st.write(f"**Genres:** {game[4]}")
 
                                 # Add Wishlist button if it's not the user's own game
@@ -841,7 +877,7 @@ else:
                                     if st.button(f"Submit Review for {game[2]}", key=f"submit_{game[0]}"):
                                         add_or_update_review(user_id, game[1], game[2], review, rating)
                                         st.success("Review submitted successfully.")
-                        
+
                             st.divider()
                 else:
                     st.write("You don't own any games on this account.")
