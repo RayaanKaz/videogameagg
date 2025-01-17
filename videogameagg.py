@@ -14,7 +14,6 @@ load_dotenv()
 
 # Steam API Key
 STEAM_API_KEY = os.getenv("STEAM_API_KEY")
-
 # Configure Google Generative AI
 GENAI_API_KEY = os.getenv("GENAI_API_KEY")
 import google.generativeai as genai
@@ -446,49 +445,58 @@ def is_game_in_wishlist(user_id, steam_game_id):
         conn.close()
 
 def add_or_update_review(user_id, game_id, game_name, review_text, rating):
-    """Add or update a review for a game in the database."""
+    """Modified review addition function with better error handling"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        # Check if the game exists in the database
+        # Debug output
+        st.write(f"Adding review for user {user_id}, game {game_name}")
+        
+        # First ensure the game exists
         cursor.execute("""
-            SELECT id FROM games WHERE steam_game_id = ? AND user_id = ?
-        """, (game_id, user_id))
+            INSERT OR IGNORE INTO games (steam_game_id, game_name, user_id, added_on)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        """, (game_id, game_name, user_id))
+        
+        # Get the game's database ID
+        cursor.execute("SELECT id FROM games WHERE steam_game_id = ? AND user_id = ?", (game_id, user_id))
         game_entry = cursor.fetchone()
-
+        
         if not game_entry:
-            # Insert the game if it doesn't exist, ensuring game_name is saved
-            cursor.execute("""
-                INSERT INTO games (steam_game_id, game_name, user_id, added_on)
-                VALUES (?, ?, ?, ?)
-            """, (game_id, game_name, user_id, datetime.now()))
-            game_entry_id = cursor.lastrowid
-        else:
-            game_entry_id = game_entry[0]
-
-        # Check if a review already exists
+            st.error("Failed to find or create game entry")
+            return False
+            
+        game_db_id = game_entry[0]
+        
+        # Check for existing review
         cursor.execute("""
-            SELECT review_id FROM reviews WHERE user_id = ? AND game_id = ?
-        """, (user_id, game_entry_id))
+            SELECT review_id FROM reviews 
+            WHERE user_id = ? AND game_id = ?
+        """, (user_id, game_db_id))
         existing_review = cursor.fetchone()
-
+        
         if existing_review:
-            # Update the existing review
+            # Update existing review
             cursor.execute("""
-                UPDATE reviews
+                UPDATE reviews 
                 SET review_text = ?, rating = ?, created_at = CURRENT_TIMESTAMP
                 WHERE review_id = ?
             """, (review_text, rating, existing_review[0]))
+            st.success("Review updated successfully!")
         else:
-            # Add a new review
+            # Add new review
             cursor.execute("""
                 INSERT INTO reviews (user_id, game_id, review_text, rating, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, game_entry_id, review_text, rating, datetime.now()))
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, game_db_id, review_text, rating))
+            st.success("Review added successfully!")
+            
         conn.commit()
-        st.success(f"Review for '{game_name}' has been added/updated successfully!")
-    except Exception as e:
-        st.error(f"Error saving review: {e}")
+        return True
+        
+    except sqlite3.Error as e:
+        st.error(f"Database error while saving review: {e}")
+        return False
     finally:
         conn.close()
 
@@ -611,24 +619,39 @@ def get_user_reviews_for_ai(user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
+        # First, let's verify the user exists
+        cursor.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            st.error(f"User ID {user_id} not found in database")
+            return []
+
+        # Direct query to get ALL reviews, without any joins initially
         cursor.execute("""
-            SELECT g.game_name, r.review_text, r.rating 
+            SELECT r.review_id, r.review_text, r.rating, g.game_name
             FROM reviews r
-            JOIN games g ON r.game_id = g.id
+            INNER JOIN games g ON r.game_id = g.id
             WHERE r.user_id = ?
         """, (user_id,))
+        
         reviews = cursor.fetchall()
         
-        # Debugging: Check fetched reviews
-        st.write("Fetched Reviews:", reviews)
+        # Debug output
+        st.write(f"Found {len(reviews)} reviews for user {user[0]}")
+        for review in reviews:
+            st.write(f"Game: {review[3]}")
+            st.write(f"Rating: {review[2]}")
+            st.write("---")
+            
+        # Format reviews for return
+        formatted_reviews = [(r[3], r[1], r[2]) for r in reviews]
+        return formatted_reviews
         
-        return reviews
-    except Exception as e:
-        st.error(f"Error fetching reviews: {e}")
+    except sqlite3.Error as e:
+        st.error(f"Database error: {e}")
         return []
     finally:
         conn.close()
-
 
 
 def add_to_wishlist(user_id, steam_game_id, game_name, cover_url, store_url):
@@ -692,42 +715,101 @@ def fetch_wishlist(user_id):
 def generate_recommendations(user_id, limit=10):
     reviews = get_user_reviews_for_ai(user_id)
     
-    # Check if reviews are retrieved
     if not reviews:
-        return [{"name": "No Reviews Found", "description": "Please submit reviews for better recommendations."}]
-
-    # Prepare the input prompt for the AI
-    review_text = "\n".join([f"{game}: {review} (Rating: {rating}/5)" for game, review, rating in reviews])
-    prompt = f"""
-    Based on these game reviews, recommend {limit} Steam games (not other games like minecraft. Game has to be on steam) the user should try. DO NOT SAY GAMES THE USER ALREADY HAS IN THEIR REVIEWS SAY OTHER GAMES
-    Provide each game's name, a short description, its genre, and a brief premise:
+        return [{
+            "name": "No Reviews Found",
+            "description": "Please submit some game reviews to get personalized recommendations.",
+            "genres": "N/A"
+        }]
     
+    review_text = "\n".join([
+        f"Game: {game}\nReview: {review}\nRating: {rating}/5\n"
+        for game, review, rating in reviews
+    ])
+    
+    prompt = f"""
+    Based on these user game reviews, recommend {limit} different Steam games.
+    
+    User's Game Reviews:
     {review_text}
+    
+    For each game, provide exactly three lines in this format:
+    Game Name
+    Brief explanation of why this game matches the user's tastes (1-2 sentences)
+    Main genres separated by commas (e.g. Action, Adventure, RPG)
+    ---
+    
+    Rules:
+    - Use plain text game names without any formatting
+    - Only recommend games available on Steam
+    - Do not recommend games the user has already reviewed
+    - Keep game names concise and exact as they appear on Steam
+    - Provide short, direct explanations
+    - Focus on games matching the user's demonstrated preferences
+    
+    Please provide exactly {limit} recommendations following this format.
     """
     
     try:
-        # Generate recommendations
         response = model.generate_content(prompt)
-        
-        # Debugging: Display the response
-        st.write("Response from Gemini:", response.text)
-        
-        # Parse the response
         recommendations = []
+        
+        current_rec = {}
+        section = None
+        
         for line in response.text.split("\n"):
-            if line.strip():
-                parts = line.split(" - ")
-                if len(parts) >= 3:
-                    name, description, genre_premise = parts[0], parts[1], " - ".join(parts[2:])
-                    recommendations.append({
-                        "name": name.strip(),
-                        "description": description.strip(),
-                        "genres": genre_premise.strip()
-                    })
-        return recommendations[:limit]
+            line = line.strip()
+            if not line or line == "---":
+                if current_rec and "name" in current_rec:
+                    current_rec.setdefault("description", "No description available")
+                    current_rec.setdefault("genres", "Genre information unavailable")
+                    recommendations.append(current_rec)
+                    current_rec = {}
+                continue
+                
+            if not current_rec:
+                clean_name = line.strip('*').strip('_').strip()
+                current_rec = {"name": clean_name}
+                section = "description"
+            elif section == "description":
+                current_rec["description"] = line
+                section = "genres"
+            elif section == "genres":
+                current_rec["genres"] = line
+        
+        if current_rec and "name" in current_rec:
+            current_rec.setdefault("description", "No description available")
+            current_rec.setdefault("genres", "Genre information unavailable")
+            recommendations.append(current_rec)
+        
+        recommendations = recommendations[:limit]
+        
+        if not recommendations:
+            return [{
+                "name": "No recommendations available",
+                "description": "Please try again.",
+                "genres": "N/A"
+            }]
+            
+        return recommendations
+        
     except Exception as e:
-        st.error(f"Error generating recommendations: {e}")
-        return [{"name": "Error", "description": "Could not fetch recommendations due to an error."}]
+        return [{
+            "name": "Error",
+            "description": f"An error occurred: {str(e)}",
+            "genres": "N/A"
+        }]
+
+
+def display_recommendations(recommendations):
+    """Display recommendations in a simple, clean format"""
+    for rec in recommendations:
+        st.write(f"**{rec.get('name', 'Unknown Game')}**")
+        st.write(rec.get('description', 'No description available'))
+        genres = rec.get('genres', '')
+        if genres and genres != "N/A":
+            st.write(f"*{genres}*")
+        st.divider()
 
 # Streamlit UI
 st.set_page_config(page_title="Steam Recommendations", layout="wide")
@@ -911,30 +993,28 @@ else:
             else:
                 st.write("You have not submitted any reviews yet.")
 
-        # Streamlit Recommendations Tab
+    # Streamlit Recommendations Tab
     elif page == "Recommendations":
-        st.header("Game Recommendations")
-    
-        # Fetch and display username
+        st.header("Personalized Game Recommendations")
+        
+        # Get username for personalization
         username = get_username(user_id)
         if username:
-            st.write(f"Welcome, **{username}**! Here are your personalized game recommendations.")
-        else:
-            st.write("Welcome! Here are your personalized game recommendations.")
-
-        # Generate recommendations if not already in session state
-        if "rec_data" not in st.session_state or not st.session_state.rec_data:
+            st.write(f"Welcome back, **{username}**! Based on your reviews, here are some games you might enjoy:")
+        
+        # Add refresh button
+        if st.button("🔄 Refresh Recommendations"):
             st.session_state.rec_data = generate_recommendations(user_id, limit=10)
-
+        
+        # Generate initial recommendations if needed
+        if "rec_data" not in st.session_state:
+            st.session_state.rec_data = generate_recommendations(user_id, limit=10)
+        
         # Display recommendations
         if st.session_state.rec_data:
-            for rec in st.session_state.rec_data:
-                st.write(f"**Name:** {rec['name']}")
-                st.write(f"**Description:** {rec['description']}")
-                st.write(f"**Genres and Premise:** {rec.get('genres', 'No genres available')}")
-                st.write("---")
+            display_recommendations(st.session_state.rec_data)
         else:
-            st.write("No more recommendations available at this time.")
+            st.warning("Unable to generate recommendations at this time. Please try again later.")
         
     elif page == "Search Games":
         search_and_display_games()
