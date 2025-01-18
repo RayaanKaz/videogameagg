@@ -235,6 +235,76 @@ def fetch_owned_games(steamid):
         st.error(f"Failed to fetch games. Steam API returned: {response.status_code} - {response.text}")
         return []
 
+def fetch_game_details(appid, game_name):
+    """
+    Fetch game details from Steam API with improved error handling and language settings.
+
+    Args:
+        appid (str): Steam app ID
+        game_name (str): Default game name to fall back on
+
+    Returns:
+        tuple: (genres, cover_url, store_url, description, name)
+    """
+    # Default values in case of API failure
+    name = game_name
+    genres = "Unknown"
+    cover_url = "https://via.placeholder.com/150"
+    store_url = f"https://store.steampowered.com/app/{appid}"
+    description = "No description available."
+
+    try:
+        # Set language preference to English and include additional metadata
+        params = {
+            'appids': appid,
+            'l': 'english',  # Force English language
+            'cc': 'us'       # Set region to US for consistent results
+        }
+
+        url = "https://store.steampowered.com/api/appdetails"
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Check if we got valid data
+            if data and str(appid) in data and data[str(appid)].get('success', False):
+                game_data = data[str(appid)]['data']
+
+                # Extract game details with fallbacks
+                name = game_data.get('name', game_name)
+
+                # Get genres with error handling
+                genre_list = game_data.get('genres', [])
+                if genre_list and isinstance(genre_list, list):
+                    genres = ", ".join([genre.get('description', '') for genre in genre_list if genre.get('description')])
+
+                # Get header image with validation
+                if 'header_image' in game_data and game_data['header_image'].startswith('http'):
+                    cover_url = game_data['header_image']
+
+                # Get description with HTML cleanup
+                if 'short_description' in game_data:
+                    description = BeautifulSoup(game_data['short_description'], 'html.parser').get_text()
+                    # Limit description length
+                    if len(description) > 300:
+                        description = description[:297] + "..."
+
+                # Validate store URL format
+                store_url = f"https://store.steampowered.com/app/{appid}"
+
+        else:
+            st.warning(f"Unable to fetch details for {game_name}. Using basic information.")
+
+    except requests.RequestException as e:
+        st.error(f"Network error while fetching game details: {str(e)}")
+    except (KeyError, ValueError, json.JSONDecodeError) as e:
+        st.error(f"Error processing game data: {str(e)}")
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+
+    return genres, cover_url, store_url, description, name
+
 def add_games_to_db(games, user_id, steam_user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -490,76 +560,6 @@ def add_review(user_id, game_id, game_name, review_text, rating):
         return False
     finally:
         conn.close()
-
-def fetch_game_details(appid, game_name):
-    """
-    Fetch game details from Steam API with improved error handling and language settings.
-
-    Args:
-        appid (str): Steam app ID
-        game_name (str): Default game name to fall back on
-
-    Returns:
-        tuple: (genres, cover_url, store_url, description, name)
-    """
-    # Default values in case of API failure
-    name = game_name
-    genres = "Unknown"
-    cover_url = "https://via.placeholder.com/150"
-    store_url = f"https://store.steampowered.com/app/{appid}"
-    description = "No description available."
-
-    try:
-        # Set language preference to English and include additional metadata
-        params = {
-            'appids': appid,
-            'l': 'english',  # Force English language
-            'cc': 'us'       # Set region to US for consistent results
-        }
-
-        url = "https://store.steampowered.com/api/appdetails"
-        response = requests.get(url, params=params, timeout=10)
-
-        if response.status_code == 200:
-            data = response.json()
-
-            # Check if we got valid data
-            if data and str(appid) in data and data[str(appid)].get('success', False):
-                game_data = data[str(appid)]['data']
-
-                # Extract game details with fallbacks
-                name = game_data.get('name', game_name)
-
-                # Get genres with error handling
-                genre_list = game_data.get('genres', [])
-                if genre_list and isinstance(genre_list, list):
-                    genres = ", ".join([genre.get('description', '') for genre in genre_list if genre.get('description')])
-
-                # Get header image with validation
-                if 'header_image' in game_data and game_data['header_image'].startswith('http'):
-                    cover_url = game_data['header_image']
-
-                # Get description with HTML cleanup
-                if 'short_description' in game_data:
-                    description = BeautifulSoup(game_data['short_description'], 'html.parser').get_text()
-                    # Limit description length
-                    if len(description) > 300:
-                        description = description[:297] + "..."
-
-                # Validate store URL format
-                store_url = f"https://store.steampowered.com/app/{appid}"
-
-        else:
-            st.warning(f"Unable to fetch details for {game_name}. Using basic information.")
-
-    except requests.RequestException as e:
-        st.error(f"Network error while fetching game details: {str(e)}")
-    except (KeyError, ValueError, json.JSONDecodeError) as e:
-        st.error(f"Error processing game data: {str(e)}")
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-
-    return genres, cover_url, store_url, description, name
 
 def get_games_from_db(user_id, steam_user_id):
     conn = sqlite3.connect(DB_FILE)
