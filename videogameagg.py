@@ -407,7 +407,7 @@ def search_and_display_games():
 
                     if st.button(f"Submit Review for {name}", key=f"submit_review_{game['appid']}"):
                         if user_id:
-                            add_or_update_review(user_id, game["appid"], name, review, rating)
+                            add_review(user_id, game["appid"], name, review, rating)
                             st.success(f"Your review for {name} has been saved!")
                         else:
                             st.error("Please log in to submit a review.")
@@ -444,7 +444,7 @@ def is_game_in_wishlist(user_id, steam_game_id):
     finally:
         conn.close()
 
-def add_or_update_review(user_id, game_id, game_name, review_text, rating):
+def add_review(user_id, game_id, game_name, review_text, rating):
     """Modified review addition function with better error handling"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -475,21 +475,12 @@ def add_or_update_review(user_id, game_id, game_name, review_text, rating):
         """, (user_id, game_db_id))
         existing_review = cursor.fetchone()
 
-        if existing_review:
-            # Update existing review
-            cursor.execute("""
-                UPDATE reviews 
-                SET review_text = ?, rating = ?, created_at = CURRENT_TIMESTAMP
-                WHERE review_id = ?
-            """, (review_text, rating, existing_review[0]))
-            st.success("Review updated successfully!")
-        else:
             # Add new review
-            cursor.execute("""
-                INSERT INTO reviews (user_id, game_id, review_text, rating, created_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (user_id, game_db_id, review_text, rating))
-            st.success("Review added successfully!")
+        cursor.execute("""
+            INSERT INTO reviews (user_id, game_id, review_text, rating, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (user_id, game_db_id, review_text, rating))
+        st.success("Review added successfully!")
 
         conn.commit()
         return True
@@ -1008,7 +999,7 @@ else:
                                     review = st.text_area(f"Leave a review for {game[2]}", key=f"review_{game[0]}")
                                     rating = st.slider(f"Rate {game[2]}", 1, 5, key=f"rating_{game[0]}")
                                     if st.button(f"Submit Review for {game[2]}", key=f"submit_{game[0]}"):
-                                        add_or_update_review(user_id, game[1], game[2], review, rating)
+                                        add_review(user_id, game[1], game[2], review, rating)
                                         st.success("Review submitted successfully.")
 
                             st.divider()
