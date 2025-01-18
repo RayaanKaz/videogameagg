@@ -8,8 +8,7 @@ from dotenv import load_dotenv
 import hashlib
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from datetime import datetime
-
+from datetime import datetime, timedelta
 load_dotenv()
 
 # Steam API Key
@@ -591,9 +590,28 @@ def get_user_reviews(user_id):
             FROM reviews r
             JOIN games g ON r.game_id = g.id
             WHERE r.user_id = ?
+            ORDER BY r.created_at DESC
         """, (user_id,))
-        reviews = cursor.fetchall()
-        return reviews
+        results = cursor.fetchall()
+        
+        # Adjust time by subtracting 5 hours, handling milliseconds
+        formatted_results = []
+        for row in results:
+            if row[4]:  # created_at timestamp
+                # Parse timestamp with milliseconds
+                try:
+                    # First try with milliseconds
+                    timestamp = datetime.strptime(row[4], '%Y-%m-%d %H:%M:%S.%f')
+                except ValueError:
+                    # If no milliseconds, try without them
+                    timestamp = datetime.strptime(row[4], '%Y-%m-%d %H:%M:%S')
+                    
+                adjusted_time = timestamp - timedelta(hours=5)
+                formatted_date = adjusted_time.strftime('%Y-%m-%d %I:%M %p')
+                formatted_results.append(row[:-1] + (formatted_date,))
+            else:
+                formatted_results.append(row)
+        return formatted_results
     except Exception as e:
         st.error(f"Error fetching reviews: {e}")
         return []
@@ -755,7 +773,25 @@ def fetch_wishlist(user_id):
             SELECT steam_game_id, game_name, cover_url, store_url, added_on
             FROM wishlist WHERE user_id = ?
         """, (user_id,))
-        return cursor.fetchall()
+        results = cursor.fetchall()
+        
+        # Adjust time by subtracting 5 hours, handling milliseconds
+        formatted_results = []
+        for row in results:
+            if row[4]:  # added_on timestamp
+                try:
+                    # First try with milliseconds
+                    timestamp = datetime.strptime(row[4], '%Y-%m-%d %H:%M:%S.%f')
+                except ValueError:
+                    # If no milliseconds, try without them
+                    timestamp = datetime.strptime(row[4], '%Y-%m-%d %H:%M:%S')
+                    
+                adjusted_time = timestamp - timedelta(hours=5)
+                formatted_date = adjusted_time.strftime('%Y-%m-%d %I:%M %p')
+                formatted_results.append(row[:-1] + (formatted_date,))
+            else:
+                formatted_results.append(row)
+        return formatted_results
     except Exception as e:
         st.error(f"Error fetching wishlist: {e}")
         return []
