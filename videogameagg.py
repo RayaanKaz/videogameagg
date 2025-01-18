@@ -903,6 +903,7 @@ else:
 
     elif page == "My Wishlist":
         st.header("Your Wishlist")
+        st.subheader("(Time is in GST)")
 
         # Fetch the wishlist for the logged-in user
         wishlist = fetch_wishlist(user_id)
@@ -1010,6 +1011,7 @@ else:
 
     elif page == "Your Reviews":
         st.header("Your Reviews And Notes")
+        st.subheader("(Time is in GST)")
         user_id = st.session_state.get("user_id")
         if not user_id:
             st.warning("You must be logged in to view your reviews.")
