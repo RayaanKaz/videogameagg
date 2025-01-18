@@ -143,16 +143,31 @@ def logout_user():
         st.success("Logged out successfully.")
 
 def extract_user_id(steam_url):
+    """
+    Safely extract Steam user ID from various URL formats
+    """
     try:
         parsed_url = urlparse(steam_url)
-        path_segments = parsed_url.path.strip('/').split('/')
-        if len(path_segments) > 1 and path_segments[0] in ['profiles', 'id']:
-            return path_segments[-1]  # This will return the vanity URL part
+        
+        # Clean and split the path
+        path_segments = [seg for seg in parsed_url.path.strip('/').split('/') if seg]
+        
+        if not path_segments:
+            raise ValueError("Invalid Steam URL: No path segments found")
+            
+        # Handle different URL formats
+        if path_segments[0] in ['profiles', 'id']:
+            if len(path_segments) < 2:
+                raise ValueError("Invalid Steam URL: Missing user identifier")
+            return path_segments[1]  # Return the ID/vanity URL part
         else:
-            st.error("Invalid Steam URL format. Please use a valid profile or ID URL.")
-            return None
+            raise ValueError("Invalid Steam URL: Must start with 'profiles' or 'id'")
+            
+    except (AttributeError, IndexError) as e:
+        st.error(f"Invalid Steam URL format: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"Error parsing URL: {e}")
+        st.error(f"Error parsing Steam URL: {str(e)}")
         return None
 
 def get_steam_username(steam_id):
@@ -234,6 +249,75 @@ def fetch_owned_games(steamid):
         st.error(f"Failed to fetch games. Steam API returned: {response.status_code} - {response.text}")
         return []
 
+def fetch_game_details(appid, game_name):
+    """
+    Fetch game details from Steam API with improved error handling and language settings.
+    
+    Args:
+        appid (str): Steam app ID
+        game_name (str): Default game name to fall back on
+        
+    Returns:
+        tuple: (genres, cover_url, store_url, description, name)
+    """
+    # Default values in case of API failure
+    name = game_name
+    genres = "Unknown"
+    cover_url = "https://via.placeholder.com/150"
+    store_url = f"https://store.steampowered.com/app/{appid}"
+    description = "No description available."
+
+    try:
+        # Set language preference to English and include additional metadata
+        params = {
+            'appids': appid,
+            'l': 'english',  # Force English language
+            'cc': 'us'       # Set region to US for consistent results
+        }
+        
+        url = "https://store.steampowered.com/api/appdetails"
+        response = requests.get(url, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Check if we got valid data
+            if data and str(appid) in data and data[str(appid)].get('success', False):
+                game_data = data[str(appid)]['data']
+                
+                # Extract game details with fallbacks
+                name = game_data.get('name', game_name)
+                
+                # Get genres with error handling
+                genre_list = game_data.get('genres', [])
+                if genre_list and isinstance(genre_list, list):
+                    genres = ", ".join([genre.get('description', '') for genre in genre_list if genre.get('description')])
+                
+                # Get header image with validation
+                if 'header_image' in game_data and game_data['header_image'].startswith('http'):
+                    cover_url = game_data['header_image']
+                
+                # Get description with HTML cleanup
+                if 'short_description' in game_data:
+                    description = BeautifulSoup(game_data['short_description'], 'html.parser').get_text()
+                    # Limit description length
+                    if len(description) > 300:
+                        description = description[:297] + "..."
+                
+                # Validate store URL format
+                store_url = f"https://store.steampowered.com/app/{appid}"
+                
+        else:
+            st.warning(f"Unable to fetch details for {game_name}. Using basic information.")
+            
+    except requests.RequestException as e:
+        st.error(f"Network error while fetching game details: {str(e)}")
+    except (KeyError, ValueError, json.JSONDecodeError) as e:
+        st.error(f"Error processing game data: {str(e)}")
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+        
+    return genres, cover_url, store_url, description, name
 def add_games_to_db(games, user_id, steam_user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -499,76 +583,6 @@ def add_or_update_review(user_id, game_id, game_name, review_text, rating):
     finally:
         conn.close()
 
-def fetch_game_details(appid, game_name):
-    """
-    Fetch game details from Steam API with improved error handling and language settings.
-    
-    Args:
-        appid (str): Steam app ID
-        game_name (str): Default game name to fall back on
-        
-    Returns:
-        tuple: (genres, cover_url, store_url, description, name)
-    """
-    # Default values in case of API failure
-    name = game_name
-    genres = "Unknown"
-    cover_url = "https://via.placeholder.com/150"
-    store_url = f"https://store.steampowered.com/app/{appid}"
-    description = "No description available."
-
-    try:
-        # Set language preference to English and include additional metadata
-        params = {
-            'appids': appid,
-            'l': 'english',  # Force English language
-            'cc': 'us'       # Set region to US for consistent results
-        }
-        
-        url = "https://store.steampowered.com/api/appdetails"
-        response = requests.get(url, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Check if we got valid data
-            if data and str(appid) in data and data[str(appid)].get('success', False):
-                game_data = data[str(appid)]['data']
-                
-                # Extract game details with fallbacks
-                name = game_data.get('name', game_name)
-                
-                # Get genres with error handling
-                genre_list = game_data.get('genres', [])
-                if genre_list and isinstance(genre_list, list):
-                    genres = ", ".join([genre.get('description', '') for genre in genre_list if genre.get('description')])
-                
-                # Get header image with validation
-                if 'header_image' in game_data and game_data['header_image'].startswith('http'):
-                    cover_url = game_data['header_image']
-                
-                # Get description with HTML cleanup
-                if 'short_description' in game_data:
-                    description = BeautifulSoup(game_data['short_description'], 'html.parser').get_text()
-                    # Limit description length
-                    if len(description) > 300:
-                        description = description[:297] + "..."
-                
-                # Validate store URL format
-                store_url = f"https://store.steampowered.com/app/{appid}"
-                
-        else:
-            st.warning(f"Unable to fetch details for {game_name}. Using basic information.")
-            
-    except requests.RequestException as e:
-        st.error(f"Network error while fetching game details: {str(e)}")
-    except (KeyError, ValueError, json.JSONDecodeError) as e:
-        st.error(f"Error processing game data: {str(e)}")
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-        
-    return genres, cover_url, store_url, description, name
-
 def get_games_from_db(user_id, steam_user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -722,32 +736,54 @@ def get_user_reviews_for_ai(user_id):
     finally:
         conn.close()
 
-
 def add_to_wishlist(user_id, steam_game_id, game_name, cover_url, store_url):
-    """Add a game to the user's wishlist if it is not already present."""
+    """Add a game to the user's wishlist with proper concurrency handling"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
+        # Begin transaction
+        cursor.execute("BEGIN EXCLUSIVE TRANSACTION")
+        
         # Check if the game is already in the wishlist
         cursor.execute("""
-            SELECT id FROM wishlist WHERE user_id = ? AND steam_game_id = ?
+            SELECT id FROM wishlist 
+            WHERE user_id = ? AND steam_game_id = ?
+            FOR UPDATE
         """, (user_id, steam_game_id))
         existing_entry = cursor.fetchone()
 
         if existing_entry:
+            conn.rollback()
             st.warning(f"'{game_name}' is already in your wishlist!")
-        else:
-            # Add the game to the wishlist
-            cursor.execute("""
-                INSERT INTO wishlist (user_id, steam_game_id, game_name, cover_url, store_url, added_on)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (user_id, steam_game_id, game_name, cover_url, store_url))
-            conn.commit()
-            st.success(f"'{game_name}' has been added to your wishlist!")
-    except Exception as e:
+            return False
+            
+        # Add the game to the wishlist
+        cursor.execute("""
+            INSERT INTO wishlist (user_id, steam_game_id, game_name, cover_url, store_url, added_on)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (user_id, steam_game_id, game_name, cover_url, store_url))
+        
+        # Commit transaction
+        conn.commit()
+        st.success(f"'{game_name}' has been added to your wishlist!")
+        return True
+        
+    except sqlite3.Error as e:
+        conn.rollback()
         st.error(f"Error adding game to wishlist: {e}")
+        return False
     finally:
         conn.close()
+
+def handle_wishlist_button(user_id, game, cover_url, store_url):
+    """Unified function to handle wishlist button logic"""
+    if not is_game_in_wishlist(user_id, game["appid"]):
+        if st.button(f"Add to Wishlist: {game['name']}", key=f"wishlist_{game['appid']}"):
+            return add_to_wishlist(user_id, game["appid"], game["name"], cover_url, store_url)
+    else:
+        st.info(f"{game['name']} is already in your wishlist!")
+    return False
+
 
 def remove_from_wishlist(user_id, steam_game_id):
     """Remove a game from the user's wishlist."""
@@ -809,84 +845,89 @@ def generate_recommendations(user_id, limit=10):
             "genres": "N/A"
         }]
     
+    # Create a structured review text for the AI
     review_text = "\n".join([
         f"Game: {game}\nReview: {review}\nRating: {rating}/5\n"
         for game, review, rating in reviews
     ])
     
-    prompt = f"""
-    Based on these user game reviews, recommend {limit} different Steam games.
-    
+    # Create a well-structured prompt for the AI
+    prompt = f"""Based on the following game reviews, recommend {limit} games that this user might enjoy. 
+    Consider the genres, themes, and elements the user has positively reviewed.
+
     User's Game Reviews:
     {review_text}
+
+    Please provide recommendations in this exact format for each game:
+    *Game Name*
+    Brief description explaining why this game would appeal to the user
+    Genres: [comma-separated list of relevant genres]
+
+    Focus on games that match the user's demonstrated preferences in:
+    1. Game mechanics and gameplay style
+    2. Storytelling and narrative themes
+    3. Visual style and atmosphere
+    4. Difficulty level and complexity
     
-    For each game, provide exactly three lines in this format:
-    Game Name
-    Brief explanation of why this game matches the user's tastes (1-2 sentences)
-    Main genres separated by commas (e.g. Action, Adventure, RPG)
-    ---
-    
-    Rules:
-    - Use plain text game names without any formatting
-    - Only recommend games available on Steam
-    - Do not recommend games the user has already reviewed
-    - Keep game names concise and exact as they appear on Steam
-    - Provide short, direct explanations
-    - Focus on games matching the user's demonstrated preferences
-    
-    Please provide exactly {limit} recommendations following this format.
-    """
+    Avoid recommending games that the user has already reviewed."""
     
     try:
         response = model.generate_content(prompt)
         recommendations = []
         
+        # Initialize variables for state tracking
         current_rec = {}
-        section = None
+        lines_processed = 0
+        expected_lines_per_rec = 3
         
         for line in response.text.split("\n"):
             line = line.strip()
-            if not line or line == "---":
-                if current_rec and "name" in current_rec:
-                    current_rec.setdefault("description", "No description available")
-                    current_rec.setdefault("genres", "Genre information unavailable")
-                    recommendations.append(current_rec)
-                    current_rec = {}
+            if not line:
                 continue
                 
-            if not current_rec:
-                clean_name = line.strip('*').strip('_').strip()
-                current_rec = {"name": clean_name}
-                section = "description"
-            elif section == "description":
+            # Process based on line position within recommendation
+            line_position = lines_processed % expected_lines_per_rec
+            
+            if line_position == 0:  # Game name
+                if current_rec:
+                    recommendations.append(current_rec)
+                current_rec = {"name": line.strip('*').strip('_').strip()}
+            elif line_position == 1:  # Description
                 current_rec["description"] = line
-                section = "genres"
-            elif section == "genres":
-                current_rec["genres"] = line
-        
-        if current_rec and "name" in current_rec:
-            current_rec.setdefault("description", "No description available")
-            current_rec.setdefault("genres", "Genre information unavailable")
+            elif line_position == 2:  # Genres
+                current_rec["genres"] = line.replace("Genres:", "").strip()
+                
+            lines_processed += 1
+            
+        # Add the last recommendation if complete
+        if current_rec and len(current_rec) == 3:
             recommendations.append(current_rec)
+            
+        # Validate and clean recommendations
+        valid_recommendations = []
+        for rec in recommendations:
+            if all(key in rec for key in ["name", "description", "genres"]):
+                valid_recommendations.append(rec)
+                
+        # Ensure we don't exceed the limit
+        valid_recommendations = valid_recommendations[:limit]
         
-        recommendations = recommendations[:limit]
-        
-        if not recommendations:
+        if not valid_recommendations:
             return [{
-                "name": "No recommendations available",
-                "description": "Please try again.",
+                "name": "Error in Recommendations",
+                "description": "Unable to generate valid recommendations. Please try again.",
                 "genres": "N/A"
             }]
             
-        return recommendations
+        return valid_recommendations
         
     except Exception as e:
+        st.error(f"Error generating recommendations: {str(e)}")
         return [{
             "name": "Error",
             "description": f"An error occurred: {str(e)}",
             "genres": "N/A"
         }]
-
 
 def display_recommendations(recommendations):
     """Display recommendations in a simple, clean format"""
