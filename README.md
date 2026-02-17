@@ -1,0 +1,3 @@
+Full-stack Python web application that aggregates Steam game data, enables personal reviews/notes, and generates AI-powered game recommendations. The platform integrates Steam Web API and IGDB data, stores user libraries and reviews in a SQLite database, and provides interactive dashboards using Streamlit.
+
+Key features include Steam account integration to import owned games and playtime, search and wishlist functionality, user authentication with encrypted passwords, and a personalized recommendation engine that analyzes written reviews to suggest new games. The app also supports sorting/filtering libraries, viewing game news, and editing or deleting reviews, creating a centralized hub for organizing and reflecting on gaming experiences.
